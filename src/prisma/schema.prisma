@@ -1,0 +1,23 @@
+model Deal {
+  id         String   @id @default(cuid())
+  title      String
+  url        String
+  imageUrl   String?
+  price      Float?
+  oldPrice   Float?
+  discount   Int?     @default(0)   // نسبة الخصم
+  currency   String   @default("USD")
+  store      String                  // Amazon / AliExpress / Temu / Walmart
+  source     String                  // amazon | aliexpress | temu | walmart
+  market     String                  // US | CN
+  rating     Float?   @default(0)
+  clicks     Int      @default(0)
+  isActive   Boolean  @default(true)
+  isFeatured Boolean  @default(false)
+  score      Float    @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([isActive, score])
+  @@unique([source, url])
+}
