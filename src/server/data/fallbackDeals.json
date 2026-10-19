@@ -1,0 +1,12 @@
+[
+  { "id": "f1", "title": "Wireless Earbuds Pro - خصم حقيقي", "url": "#", "imageUrl": "", "price": 19.99, "oldPrice": 59.99, "discount": 67, "currency": "USD", "store": "AliExpress", "market": "CN", "rating": 4.7, "clicks": 0, "isActive": true },
+  { "id": "f2", "title": "Smart Watch Series 9", "url": "#", "imageUrl": "", "price": 29.9, "oldPrice": 89.0, "discount": 66, "currency": "USD", "store": "Temu", "market": "CN", "rating": 4.5, "clicks": 0, "isActive": true },
+  { "id": "f3", "title": "PlayStation 5 Bundle", "url": "#", "imageUrl": "", "price": 399.0, "oldPrice": 499.0, "discount": 20, "currency": "USD", "store": "Amazon", "market": "US", "rating": 4.9, "clicks": 0, "isActive": true },
+  { "id": "f4", "title": "4K HD Projector Portable", "url": "#", "imageUrl": "", "price": 54.0, "oldPrice": 129.0, "discount": 58, "currency": "USD", "store": "AliExpress", "market": "CN", "rating": 4.4, "clicks": 0, "isActive": true },
+  { "id": "f5", "title": "Robot Vacuum Cleaner", "url": "#", "imageUrl": "", "price": 89.0, "oldPrice": 199.0, "discount": 55, "currency": "USD", "store": "Walmart", "market": "US", "rating": 4.3, "clicks": 0, "isActive": true },
+  { "id": "f6", "title": "Air Fryer 8L XXL", "url": "#", "imageUrl": "", "price": 45.0, "oldPrice": 99.0, "discount": 54, "currency": "USD", "store": "Amazon", "market": "US", "rating": 4.6, "clicks": 0, "isActive": true },
+  { "id": "f7", "title": "LED Ring Light Kit", "url": "#", "imageUrl": "", "price": 12.5, "oldPrice": 35.0, "discount": 64, "currency": "USD", "store": "Temu", "market": "CN", "rating": 4.2, "clicks": 0, "isActive": true },
+  { "id": "f8", "title": "Gaming Chair Ergonomic", "url": "#", "imageUrl": "", "price": 119.0, "oldPrice": 249.0, "discount": 52, "currency": "USD", "store": "Walmart", "market": "US", "rating": 4.1, "clicks": 0, "isActive": true },
+  { "id": "f9", "title": "Bluetooth Speaker 60W", "url": "#", "imageUrl": "", "price": 22.0, "oldPrice": 49.0, "discount": 55, "currency": "USD", "store": "AliExpress", "market": "CN", "rating": 4.5, "clicks": 0, "isActive": true },
+  { "id": "f10", "title": "Instant Pot Duo 7-in-1", "url": "#", "imageUrl": "", "price": 69.0, "oldPrice": 129.0, "discount": 46, "currency": "USD", "store": "Amazon", "market": "US", "rating": 4.8, "clicks": 0, "isActive": true }
+]
