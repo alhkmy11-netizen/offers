@@ -60,7 +60,6 @@ export const AiAssistantView: React.FC = () => {
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -73,7 +72,7 @@ export const AiAssistantView: React.FC = () => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
     } catch {
-      // تجاهل أي خطأ بالكتابة في localStorage
+      // تجاهل أي خطأ بالحفظ
     }
   }, [messages]);
 
@@ -185,11 +184,6 @@ export const AiAssistantView: React.FC = () => {
     setInputMessage('');
   };
 
-  const handleSuggestionClick = (suggestion: string) => {
-    if (isLoading) return;
-    handleSendMessage(suggestion);
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -240,48 +234,61 @@ export const AiAssistantView: React.FC = () => {
               key={msg.id}
               className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
             >
-              {/* أيقونة المرسل */}
               <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center ${
                   msg.role === 'user'
-                    ? 'bg-slate-800 text-white'
-                    : msg.failed
-                    ? 'bg-red-100 text-red-500'
-                    : 'bg-amber-100 text-amber-600'
+                    ? 'bg-amber-400 text-slate-900'
+                    : 'bg-slate-900 text-amber-400'
                 }`}
               >
-                {msg.role === 'user' ? (
-                  <User className="w-4 h-4" />
-                ) : msg.failed ? (
-                  <AlertCircle className="w-4 h-4" />
-                ) : (
-                  <Bot className="w-4 h-4" />
-                )}
+                {msg.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
               </div>
 
-              {/* فقاعة الرسالة */}
-              <div className={`flex flex-col max-w-[75%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+              <div className={`flex flex-col gap-1.5 max-w-[80%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div
-                  className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-line ${
+                  className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
                     msg.role === 'user'
-                      ? 'bg-slate-800 text-white rounded-tl-sm'
+                      ? 'bg-amber-400 text-slate-900 rounded-tl-none'
                       : msg.failed
-                      ? 'bg-red-50 text-red-700 border border-red-200 rounded-tr-sm'
-                      : 'bg-slate-100 text-slate-800 rounded-tr-sm'
+                      ? 'bg-rose-50 text-rose-700 border border-rose-200 rounded-tr-none'
+                      : 'bg-slate-100 text-slate-800 rounded-tr-none'
                   }`}
                 >
+                  {msg.failed && (
+                    <div className="flex items-center gap-1.5 mb-1 text-rose-600 font-bold text-xs">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      تعذر إتمام الطلب
+                    </div>
+                  )}
                   {msg.text}
                 </div>
 
-                <div className="flex items-center gap-2 mt-1 px-1">
+                {/* الاقتراحات */}
+                {msg.role === 'model' && msg.suggestions && msg.suggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {msg.suggestions.map((s, idx) => (
+                      <button
+                        key={idx}
+                        disabled={isLoading}
+                        onClick={() => handleSendMessage(s)}
+                        className="text-xs bg-white border border-slate-300 hover:border-amber-400 hover:bg-amber-50 disabled:opacity-40 text-slate-700 px-3 py-1.5 rounded-full transition-colors"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* أدوات الرسالة: الوقت، نسخ، تقييم، إعادة محاولة */}
+                <div className="flex items-center gap-2 px-1">
                   <span className="text-[10px] text-slate-400">{msg.timestamp}</span>
 
                   {msg.role === 'model' && !msg.failed && (
                     <>
                       <button
                         onClick={() => handleCopy(msg.id, msg.text)}
-                        title="نسخ الرد"
-                        className="text-slate-400 hover:text-slate-600 transition-colors"
+                        title="نسخ الرسالة"
+                        className="text-slate-400 hover:text-slate-700 transition-colors"
                       >
                         {copiedId === msg.id ? (
                           <Check className="w-3.5 h-3.5 text-emerald-500" />
@@ -302,7 +309,7 @@ export const AiAssistantView: React.FC = () => {
                         onClick={() => handleFeedback(msg.id, 'down')}
                         title="رد غير مفيد"
                         className={`transition-colors ${
-                          msg.feedback === 'down' ? 'text-red-500' : 'text-slate-400 hover:text-red-500'
+                          msg.feedback === 'down' ? 'text-rose-500' : 'text-slate-400 hover:text-rose-500'
                         }`}
                       >
                         <ThumbsDown className="w-3.5 h-3.5" />
@@ -313,29 +320,14 @@ export const AiAssistantView: React.FC = () => {
                   {msg.failed && (
                     <button
                       onClick={() => handleRetry(msg.originalQuery)}
-                      className="flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-700"
+                      disabled={isLoading}
+                      className="flex items-center gap-1 text-rose-600 hover:text-rose-800 text-[11px] font-bold disabled:opacity-40"
                     >
                       <RefreshCw className="w-3 h-3" />
                       إعادة المحاولة
                     </button>
                   )}
                 </div>
-
-                {/* اقتراحات الأسئلة */}
-                {msg.role === 'model' && msg.suggestions && msg.suggestions.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {msg.suggestions.map((s, i) => (
-                      <button
-                        key={i}
-                        disabled={isLoading}
-                        onClick={() => handleSuggestionClick(s)}
-                        className="text-xs bg-white border border-slate-300 hover:border-amber-400 hover:bg-amber-50 disabled:opacity-40 text-slate-600 px-3 py-1.5 rounded-full transition-colors"
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           ))}
@@ -343,10 +335,10 @@ export const AiAssistantView: React.FC = () => {
           {/* مؤشر الكتابة */}
           {isLoading && (
             <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 shrink-0 rounded-full bg-slate-900 text-amber-400 flex items-center justify-center">
                 <Bot className="w-4 h-4" />
               </div>
-              <div className="bg-slate-100 rounded-2xl rounded-tr-sm px-4 py-3 flex gap-1 items-center">
+              <div className="bg-slate-100 rounded-2xl rounded-tr-none px-4 py-3 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
                 <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
                 <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" />
@@ -359,37 +351,33 @@ export const AiAssistantView: React.FC = () => {
 
         {/* شريط الإدخال */}
         <div className="border-t border-slate-200 p-3 bg-slate-50">
-          <div className="flex items-end gap-2 bg-white border border-slate-300 rounded-2xl px-3 py-2 focus-within:border-amber-400 transition-colors">
+          <div className="flex items-end gap-2">
             <textarea
               ref={textareaRef}
               value={inputMessage}
               onChange={e => setInputMessage(e.target.value.slice(0, MAX_INPUT_LENGTH))}
               onKeyDown={handleKeyDown}
-              placeholder="اكتب سؤالك عن المقاضي والعروض هنا..."
+              placeholder="اكتب استفسارك عن التوفير والعروض..."
               rows={1}
-              className="flex-1 resize-none outline-none text-sm bg-transparent max-h-[120px] py-1.5"
-              disabled={isLoading}
+              className="flex-1 resize-none rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 max-h-[120px]"
             />
             <button
               onClick={() => handleSendMessage()}
               disabled={isLoading || !inputMessage.trim()}
-              className="shrink-0 bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-900 w-9 h-9 rounded-full flex items-center justify-center transition-colors"
+              className="shrink-0 w-10 h-10 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-30 text-amber-400 flex items-center justify-center transition-colors"
               title="إرسال"
             >
               <Send className="w-4 h-4" />
             </button>
           </div>
-
           <div className="flex items-center justify-between mt-1.5 px-1">
-            <span className="text-[10px] text-slate-400">
-              اضغط Enter للإرسال، Shift + Enter لسطر جديد
-            </span>
+            <span className="text-[10px] text-slate-400">Enter للإرسال • Shift+Enter لسطر جديد</span>
             <span
               className={`text-[10px] ${
-                remainingChars < 50 ? 'text-red-500' : 'text-slate-400'
+                remainingChars < 50 ? 'text-rose-500 font-bold' : 'text-slate-400'
               }`}
             >
-              {remainingChars}/{MAX_INPUT_LENGTH}
+              {inputMessage.length}/{MAX_INPUT_LENGTH}
             </span>
           </div>
         </div>
