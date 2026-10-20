@@ -1,80 +1,203 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ChatMessage } from '../types.ts';
-import { Sparkles, Send, Bot, User, RefreshCw, ThumbsUp } from 'lucide-react';
+import {
+  Sparkles,
+  Send,
+  Bot,
+  User,
+  RefreshCw,
+  ThumbsUp,
+  ThumbsDown,
+  Copy,
+  Check,
+  PlusCircle,
+  AlertCircle,
+} from 'lucide-react';
 
-export const AiAssistantView: React.FC = () => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: '1',
-      role: 'model',
-      text: `مرحباً بك! أنا **مستشار التوفير الذكي (Smart Deal AI)** المدعوم بنماذج Google Gemini.
+const STORAGE_KEY = 'smart_deal_ai_chat_history';
+const MAX_INPUT_LENGTH = 500;
+
+const WELCOME_MESSAGE: ChatMessage = {
+  id: '1',
+  role: 'model',
+  text: `مرحباً بك! أنا **مستشار التوفير الذكي (Smart Deal AI)** المدعوم بنماذج Google Gemini.
 أنا هنا لمساعدتك في استراتيجيات خفض فاتورة مقاضيك الشهرية، متابعة عروض البروشورات الأسبوعية في بنده والعثيم والدانوب، واختيار أفضل بدائل السلع بأعلى جودة وأوفر سعر في المملكة. 🇸🇦
 
 كيف أستطيع مساعدتك اليوم؟`,
-      timestamp: 'الآن',
-      suggestions: [
-        'ما هي مواعيد تجدد العروض الأسبوعية في بنده والعثيم؟',
-        'كيف أوزع مقاضي الشهر بين السوبرماركت وأمازون؟',
-        'ما هي أفضل المنتجات البديلة لحليب وزيوت الطبخ المرتفعة؟',
-        'كيف أستفيد من حد الشحن المجاني في تطبيقات التوصيل؟',
-      ],
-    },
-  ]);
+  timestamp: 'الآن',
+  suggestions: [
+    'ما هي مواعيد تجدد العروض الأسبوعية في بنده والعثيم؟',
+    'كيف أوزع مقاضي الشهر بين السوبرماركت وأمازون؟',
+    'ما هي أفضل المنتجات البديلة لحليب وزيوت الطبخ المرتفعة؟',
+    'كيف أستفيد من حد الشحن المجاني في تطبيقات التوصيل؟',
+  ],
+};
+
+type ExtendedMessage = ChatMessage & {
+  failed?: boolean;
+  originalQuery?: string;
+  feedback?: 'up' | 'down' | null;
+};
+
+const getTimestamp = () =>
+  new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
+
+const loadInitialMessages = (): ExtendedMessage[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {
+    // تجاهل أي خطأ بالقراءة من localStorage
+  }
+  return [WELCOME_MESSAGE];
+};
+
+export const AiAssistantView: React.FC = () => {
+  const [messages, setMessages] = useState<ExtendedMessage[]>(loadInitialMessages);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  const handleSendMessage = async (textToSend?: string) => {
-    const query = textToSend || inputMessage;
-    if (!query.trim() || isLoading) return;
-
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      text: query,
-      timestamp: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    setMessages(prev => [...prev, userMsg]);
-    setInputMessage('');
-    setIsLoading(true);
-
+  useEffect(() => {
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: query,
-          history: messages.slice(-6).map(m => ({ role: m.role, text: m.text })),
-        }),
-      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    } catch {
+      // تجاهل أي خطأ بالكتابة في localStorage
+    }
+  }, [messages]);
 
-      const data = await response.json();
-      const botMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        text: data.reply || 'تمت معالجة استفسارك بنجاح.',
-        timestamp: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
-        suggestions: data.suggestions || [],
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+    }
+  }, [inputMessage]);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const handleSendMessage = useCallback(
+    async (textToSend?: string) => {
+      const query = (textToSend ?? inputMessage).trim();
+      if (!query || isLoading) return;
+
+      const userMsgId = Date.now().toString();
+      const userMsg: ExtendedMessage = {
+        id: userMsgId,
+        role: 'user',
+        text: query,
+        timestamp: getTimestamp(),
       };
 
-      setMessages(prev => [...prev, botMsg]);
-    } catch (err) {
-      const botMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        text: 'أعتذر، حدث تأخير في الاتصال. يمكنك إعادة المحاولة أو الاستفادة من مصفوفة الأسعار ورادار الكوبونات بالأعلى.',
-        timestamp: 'الآن',
-      };
-      setMessages(prev => [...prev, botMsg]);
-    } finally {
-      setIsLoading(false);
+      setMessages(prev => [...prev, userMsg]);
+      setInputMessage('');
+      setIsLoading(true);
+
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: query,
+            history: messages.slice(-6).map(m => ({ role: m.role, text: m.text })),
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`فشل الطلب برمز الحالة ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        const botMsg: ExtendedMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'model',
+          text: data.reply || 'تمت معالجة استفسارك بنجاح.',
+          timestamp: getTimestamp(),
+          suggestions: data.suggestions || [],
+          feedback: null,
+        };
+
+        setMessages(prev => [...prev, botMsg]);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+
+        const botMsg: ExtendedMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'model',
+          text: 'أعتذر، حدث تأخير في الاتصال. يمكنك إعادة المحاولة أو الاستفادة من مصفوفة الأسعار ورادار الكوبونات بالأعلى.',
+          timestamp: getTimestamp(),
+          failed: true,
+          originalQuery: query,
+        };
+
+        setMessages(prev => [...prev, botMsg]);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [inputMessage, isLoading, messages],
+  );
+
+  const handleRetry = (originalQuery?: string) => {
+    if (!originalQuery) return;
+    handleSendMessage(originalQuery);
+  };
+
+  const handleCopy = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(prev => (prev === id ? null : prev)), 1800);
+    } catch {
+      // تجاهل فشل النسخ
     }
   };
+
+  const handleFeedback = (id: string, value: 'up' | 'down') => {
+    setMessages(prev =>
+      prev.map(m => (m.id === id ? { ...m, feedback: m.feedback === value ? null : value } : m)),
+    );
+  };
+
+  const handleNewChat = () => {
+    if (isLoading) return;
+    setMessages([WELCOME_MESSAGE]);
+    setInputMessage('');
+  };
+
+  const handleSuggestionClick = (suggestion: string) => {
+    if (isLoading) return;
+    handleSendMessage(suggestion);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  const remainingChars = MAX_INPUT_LENGTH - inputMessage.length;
 
   return (
     <div className="max-w-4xl mx-auto space-y-4" id="ai-assistant-container">
@@ -91,10 +214,21 @@ export const AiAssistantView: React.FC = () => {
             </p>
           </div>
         </div>
-
-        <span className="hidden sm:inline-flex bg-emerald-900/80 text-emerald-300 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-700/50">
-          متصل بخادم Gemini 3
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            id="ai-chat-new-btn"
+            onClick={handleNewChat}
+            disabled={isLoading}
+            title="بدء محادثة جديدة"
+            className="hidden sm:inline-flex items-center gap-1.5 bg-slate-700/60 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-xs font-bold px-3 py-1.5 rounded-full border border-slate-600/50 transition-colors"
+          >
+            <PlusCircle className="w-3.5 h-3.5" />
+            محادثة جديدة
+          </button>
+          <span className="hidden sm:inline-flex bg-emerald-900/80 text-emerald-300 text-xs font-bold px-2.5 py-1 rounded-full border border-emerald-700/50">
+            متصل بخادم Gemini 3
+          </span>
+        </div>
       </div>
 
       {/* صندوق المحادثة الرئيسي */}
@@ -104,57 +238,118 @@ export const AiAssistantView: React.FC = () => {
           {messages.map(msg => (
             <div
               key={msg.id}
-              className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+              className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
             >
+              {/* أيقونة المرسل */}
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                   msg.role === 'user'
                     ? 'bg-slate-800 text-white'
-                    : 'bg-emerald-100 text-emerald-800'
+                    : msg.failed
+                    ? 'bg-red-100 text-red-500'
+                    : 'bg-amber-100 text-amber-600'
                 }`}
               >
-                {msg.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+                {msg.role === 'user' ? (
+                  <User className="w-4 h-4" />
+                ) : msg.failed ? (
+                  <AlertCircle className="w-4 h-4" />
+                ) : (
+                  <Bot className="w-4 h-4" />
+                )}
               </div>
 
-              <div className={`space-y-2 max-w-[82%] ${msg.role === 'user' ? 'text-left' : 'text-right'}`}>
+              {/* فقاعة الرسالة */}
+              <div className={`flex flex-col max-w-[75%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                 <div
-                  className={`p-4 rounded-2xl text-xs leading-relaxed ${
+                  className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-line ${
                     msg.role === 'user'
-                      ? 'bg-emerald-600 text-white rounded-tl-none font-medium'
-                      : 'bg-slate-100 text-slate-900 rounded-tr-none whitespace-pre-line'
+                      ? 'bg-slate-800 text-white rounded-tl-sm'
+                      : msg.failed
+                      ? 'bg-red-50 text-red-700 border border-red-200 rounded-tr-sm'
+                      : 'bg-slate-100 text-slate-800 rounded-tr-sm'
                   }`}
                 >
                   {msg.text}
                 </div>
 
-                {/* اقتراحات المتابعة السريعة */}
-                {msg.suggestions && msg.suggestions.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {msg.suggestions.map((sug, i) => (
+                <div className="flex items-center gap-2 mt-1 px-1">
+                  <span className="text-[10px] text-slate-400">{msg.timestamp}</span>
+
+                  {msg.role === 'model' && !msg.failed && (
+                    <>
+                      <button
+                        onClick={() => handleCopy(msg.id, msg.text)}
+                        title="نسخ الرد"
+                        className="text-slate-400 hover:text-slate-600 transition-colors"
+                      >
+                        {copiedId === msg.id ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-500" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleFeedback(msg.id, 'up')}
+                        title="رد مفيد"
+                        className={`transition-colors ${
+                          msg.feedback === 'up' ? 'text-emerald-500' : 'text-slate-400 hover:text-emerald-500'
+                        }`}
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleFeedback(msg.id, 'down')}
+                        title="رد غير مفيد"
+                        className={`transition-colors ${
+                          msg.feedback === 'down' ? 'text-red-500' : 'text-slate-400 hover:text-red-500'
+                        }`}
+                      >
+                        <ThumbsDown className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
+
+                  {msg.failed && (
+                    <button
+                      onClick={() => handleRetry(msg.originalQuery)}
+                      className="flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-700"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      إعادة المحاولة
+                    </button>
+                  )}
+                </div>
+
+                {/* اقتراحات الأسئلة */}
+                {msg.role === 'model' && msg.suggestions && msg.suggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {msg.suggestions.map((s, i) => (
                       <button
                         key={i}
-                        onClick={() => handleSendMessage(sug)}
-                        className="text-[11px] bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-slate-200 transition-colors"
+                        disabled={isLoading}
+                        onClick={() => handleSuggestionClick(s)}
+                        className="text-xs bg-white border border-slate-300 hover:border-amber-400 hover:bg-amber-50 disabled:opacity-40 text-slate-600 px-3 py-1.5 rounded-full transition-colors"
                       >
-                        {sug}
+                        {s}
                       </button>
                     ))}
                   </div>
                 )}
-
-                <span className="text-[10px] text-slate-400 block px-1">{msg.timestamp}</span>
               </div>
             </div>
           ))}
 
+          {/* مؤشر الكتابة */}
           {isLoading && (
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center">
+            <div className="flex gap-3">
+              <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
                 <Bot className="w-4 h-4" />
               </div>
-              <div className="bg-slate-100 p-3 rounded-2xl rounded-tr-none text-xs text-slate-600 flex items-center gap-2">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" />
-                <span>جاري تحليل الأسعار والعروض في السوق السعودي...</span>
+              <div className="bg-slate-100 rounded-2xl rounded-tr-sm px-4 py-3 flex gap-1 items-center">
+                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" />
               </div>
             </div>
           )}
@@ -162,34 +357,41 @@ export const AiAssistantView: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* إدخال الرسالة */}
-        <div className="p-3 bg-slate-50 border-t border-slate-200">
-          <form
-            onSubmit={e => {
-              e.preventDefault();
-              handleSendMessage();
-            }}
-            className="flex items-center gap-2"
-          >
-            <input
-              id="ai-chat-input"
-              type="text"
-              placeholder="اكتب استفسارك عن الأسعار، العروض، أو بدائل المنتجات في السعودية..."
+        {/* شريط الإدخال */}
+        <div className="border-t border-slate-200 p-3 bg-slate-50">
+          <div className="flex items-end gap-2 bg-white border border-slate-300 rounded-2xl px-3 py-2 focus-within:border-amber-400 transition-colors">
+            <textarea
+              ref={textareaRef}
               value={inputMessage}
-              onChange={e => setInputMessage(e.target.value)}
+              onChange={e => setInputMessage(e.target.value.slice(0, MAX_INPUT_LENGTH))}
+              onKeyDown={handleKeyDown}
+              placeholder="اكتب سؤالك عن المقاضي والعروض هنا..."
+              rows={1}
+              className="flex-1 resize-none outline-none text-sm bg-transparent max-h-[120px] py-1.5"
               disabled={isLoading}
-              className="flex-1 text-xs p-3 rounded-xl border border-slate-200 bg-white focus:outline-hidden focus:border-emerald-500"
             />
             <button
-              id="ai-chat-send-btn"
-              type="submit"
-              disabled={!inputMessage.trim() || isLoading}
-              className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white px-4 py-3 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+              onClick={() => handleSendMessage()}
+              disabled={isLoading || !inputMessage.trim()}
+              className="shrink-0 bg-amber-400 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-900 w-9 h-9 rounded-full flex items-center justify-center transition-colors"
+              title="إرسال"
             >
-              <span>إرسال</span>
-              <Send className="w-3.5 h-3.5 rotate-180" />
+              <Send className="w-4 h-4" />
             </button>
-          </form>
+          </div>
+
+          <div className="flex items-center justify-between mt-1.5 px-1">
+            <span className="text-[10px] text-slate-400">
+              اضغط Enter للإرسال، Shift + Enter لسطر جديد
+            </span>
+            <span
+              className={`text-[10px] ${
+                remainingChars < 50 ? 'text-red-500' : 'text-slate-400'
+              }`}
+            >
+              {remainingChars}/{MAX_INPUT_LENGTH}
+            </span>
+          </div>
         </div>
       </div>
     </div>
