@@ -1,8 +1,45 @@
+# Dependencies
 node_modules/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+
+# Build outputs
 build/
 dist/
+out/
+.next/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# Testing
 coverage/
-.DS_Store
+.nyc_output/
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Environment
 .env*
 !.env.example
+
+# Caches
+.cache/
+.eslintcache
+.parcel-cache/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Secrets
+*.pem
