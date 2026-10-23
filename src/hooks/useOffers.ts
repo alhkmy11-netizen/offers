@@ -16,7 +16,7 @@ async function fetchExternal(category: string): Promise<Offer[]> {
     if (!res.ok) return [];
     return await res.json();
   } catch {
-    return []; // فشل المصدر الخارجي لا يكسر الصفحة
+    return [];
   }
 }
 
@@ -38,7 +38,6 @@ export function useOffers(category: string) {
         ...external.map((o) => ({ ...o, source: "external" as const })),
       ];
 
-      // إزالة التكرار بناءً على الرابط أو المعرف
       return Array.from(new Map(all.map((o) => [o.url ?? o.id, o])).values());
     },
     staleTime: 60_000,
