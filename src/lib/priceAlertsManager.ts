@@ -116,4 +116,89 @@ export function saveStoredNotifications(notifs: PriceAlertNotification[]): void 
 // تشغيل صوت تنبيه خفيف لطيف عند هبوط السعر عبر Web Audio API
 export function playChimeSound(): void {
   try {
-    if (typeof window === 'undefined')
+    if (typeof window === 'undefined') return;
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    const ctx = new AudioContextClass();
+    // بعض المتصفحات تبدأ السياق في وضع التعليق
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {});
+    }
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5
+
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    // إغلاق السياق بعد انتهاء الصوت لتفادي حد المتصفح لعدد السياقات المفتوحة
+    osc.onended = () => {
+      void ctx.close().catch(() => {});
+    };
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.36);
+  } catch {
+    // قد يمنع المتصفح الصوت قبل تفاعل المستخدم، نتجاهل بصمت
+  }
+}
+
+// طلب إذن إشعارات المتصفح (Web Notifications)
+export async function requestBrowserNotificationPermission(): Promise<boolean> {
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    try {
+      if (Notification.permission === 'granted') return true;
+      if (Notification.permission === 'denied') return false;
+      const permission = await Notification.requestPermission();
+      return permission === 'granted';
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function sendBrowserNotification(title: string, body: string, icon?: string): void {
+  if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+    try {
+      new Notification(title, {
+        body,
+        icon: icon || '/favicon.ico',
+        dir: 'rtl',
+        lang: 'ar',
+      });
+    } catch {
+      // بعض الأجهزة (مثل أندرويد) تتطلب Service Worker، نتجاهل بصمت
+    }
+  }
+}
+
+// حساب أقل سعر لمنتج مع المتجر
+export function getProductLowestPrice(product: Product, stores: Store[]): { lowestPrice: number; store: Store | null } {
+  let min = Infinity;
+  let bestStore: Store | null = null;
+
+  for (const store of stores) {
+    const info = product.prices[store.id];
+    // نتجاهل الأسعار غير الصالحة (صفر أو سالبة أو NaN)
+    if (info && info.inStock && info.priceInclVat > 0 && info.priceInclVat < min) {
+      min = info.priceInclVat;
+      bestStore = store;
+    }
+  }
+
+  return {
+    lowestPrice: min === Infinity ? 0 : min,
+    store: bestStore,
+  };
+}
