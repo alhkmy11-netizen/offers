@@ -1,8 +1,11 @@
-import { Product, Store, CartItem, PriceAlert, PriceAlertNotification } from '../types.ts';
+import { Product, Store, PriceAlert, PriceAlertNotification } from '../types.ts';
 
 const STORAGE_KEY_FAVORITES = 'hakeem_favorites_v1';
 const STORAGE_KEY_ALERTS = 'hakeem_price_alerts_v1';
 const STORAGE_KEY_NOTIFICATIONS = 'hakeem_price_notifications_v1';
+
+// الحد الأقصى للإشعارات المحفوظة حتى لا يمتلئ التخزين المحلي
+const MAX_STORED_NOTIFICATIONS = 100;
 
 export const INITIAL_FAVORITES: string[] = ['p1', 'p2', 'p3'];
 
@@ -45,135 +48,72 @@ export const INITIAL_NOTIFICATIONS: PriceAlertNotification[] = [
   }
 ];
 
-export function getStoredFavorites(): string[] {
+// ===== أدوات التخزين المحلي الآمنة =====
+
+function hasStorage(): boolean {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_FAVORITES);
-    if (raw) {
-      return JSON.parse(raw);
-    }
+    return typeof localStorage !== 'undefined';
   } catch {
-    // fallback
+    // الوصول إلى localStorage قد يرمي خطأ في وضع الخصوصية
+    return false;
   }
-  return INITIAL_FAVORITES;
+}
+
+// قراءة مصفوفة من التخزين، وترجع null إذا لم توجد أو كانت تالفة أو ليست مصفوفة
+function readArray<T>(key: string): T[] | null {
+  if (!hasStorage()) return null;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeValue(key: string, value: unknown): void {
+  if (!hasStorage()) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // التخزين ممتلئ أو غير متاح: نتجاهل بصمت
+  }
+}
+
+export function getStoredFavorites(): string[] {
+  const stored = readArray<unknown>(STORAGE_KEY_FAVORITES);
+  if (stored) {
+    return stored.filter((id): id is string => typeof id === 'string');
+  }
+  return [...INITIAL_FAVORITES];
 }
 
 export function saveStoredFavorites(favs: string[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY_FAVORITES, JSON.stringify(favs));
-  } catch {
-    // fallback
-  }
+  writeValue(STORAGE_KEY_FAVORITES, favs);
 }
 
 export function getStoredAlerts(): PriceAlert[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_ALERTS);
-    if (raw) {
-      return JSON.parse(raw);
-    }
-  } catch {
-    // fallback
-  }
-  return [];
+  return readArray<PriceAlert>(STORAGE_KEY_ALERTS) ?? [];
 }
 
 export function saveStoredAlerts(alerts: PriceAlert[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY_ALERTS, JSON.stringify(alerts));
-  } catch {
-    // fallback
-  }
+  writeValue(STORAGE_KEY_ALERTS, alerts);
 }
 
 export function getStoredNotifications(): PriceAlertNotification[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_NOTIFICATIONS);
-    if (raw) {
-      return JSON.parse(raw);
-    }
-  } catch {
-    // fallback
-  }
-  return INITIAL_NOTIFICATIONS;
+  const stored = readArray<PriceAlertNotification>(STORAGE_KEY_NOTIFICATIONS);
+  if (stored) return stored;
+  // نسخة جديدة حتى لا يعدّل أحد الثابت INITIAL_NOTIFICATIONS بالخطأ
+  return INITIAL_NOTIFICATIONS.map((n) => ({ ...n }));
 }
 
 export function saveStoredNotifications(notifs: PriceAlertNotification[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY_NOTIFICATIONS, JSON.stringify(notifs));
-  } catch {
-    // fallback
-  }
+  // الأحدث أولاً في التطبيق، لذلك نبقي أول العناصر ونقصّ الزائد
+  writeValue(STORAGE_KEY_NOTIFICATIONS, notifs.slice(0, MAX_STORED_NOTIFICATIONS));
 }
 
 // تشغيل صوت تنبيه خفيف لطيف عند هبوط السعر عبر Web Audio API
 export function playChimeSound(): void {
   try {
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5
-
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.start();
-    osc.stop(ctx.currentTime + 0.36);
-  } catch {
-    // Audio might be blocked by user gesture policies, fail silently
-  }
-}
-
-// طلب إذن إشعارات المتصفح (Web Notifications)
-export async function requestBrowserNotificationPermission(): Promise<boolean> {
-  if (typeof window !== 'undefined' && 'Notification' in window) {
-    try {
-      const permission = await Notification.requestPermission();
-      return permission === 'granted';
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-export function sendBrowserNotification(title: string, body: string, icon?: string): void {
-  if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-    try {
-      new Notification(title, {
-        body,
-        icon: icon || '/favicon.ico',
-        dir: 'rtl',
-        lang: 'ar',
-      });
-    } catch {
-      // ignore
-    }
-  }
-}
-
-// حساب أقل سعر لمنتج مع المتجر
-export function getProductLowestPrice(product: Product, stores: Store[]): { lowestPrice: number; store: Store | null } {
-  let min = Infinity;
-  let bestStore: Store | null = null;
-
-  stores.forEach((store) => {
-    const info = product.prices[store.id];
-    if (info && info.inStock && info.priceInclVat < min) {
-      min = info.priceInclVat;
-      bestStore = store;
-    }
-  });
-
-  return {
-    lowestPrice: min === Infinity ? 0 : min,
-    store: bestStore,
-  };
-}
+    if (typeof window === 'undefined')
