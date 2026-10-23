@@ -1,6 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
-import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { SAUDI_STORES, SAUDI_PRODUCTS, SAUDI_COUPONS } from './src/data/saudiData.ts';
 import { runCartOptimization } from './src/lib/cartOptimizer.ts';
@@ -12,14 +12,90 @@ import {
   buildProductPriceAnalysis,
 } from './src/lib/visionProductRecognizer.ts';
 
-dotenv.config();
-
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
 
 // دعم استقبال الصور المرفوعة بحجم يصل إلى 25 ميجابايت بأمان وسرعة
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
+// ==========================================
+// أدوات مساعدة (آمنة ولا تغيّر السلوك الحالي)
+// ==========================================
+
+// قائمة النماذج (يمكن تغييرها من البيئة عبر GEMINI_MODELS مفصولة بفاصلة)
+const GEMINI_MODELS = (
+  process.env.GEMINI_MODELS || 'gemini-3.1-flash-lite,gemini-flash-latest,gemini-3.8-flash'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// منع تضخم الذاكرة المؤقتة (الأقدم يُحذف أولاً)
+const MAX_CACHE_ENTRIES = 500;
+function cacheSet<T>(cache: Map<string, T>, key: string, value: T) {
+  if (cache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
+// قراءة JSON من رد النموذج حتى لو لُفّ داخل ```json
+function parseModelJson(text: string) {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
+  return JSON.parse(cleaned);
+}
+
+// تنظيف عناصر السلة القادمة من العميل
+function sanitizeCart(raw: unknown): { productId: string; quantity: number }[] {
+  if (!Array.isArray(raw)) return [];
+  const result: { productId: string; quantity: number }[] = [];
+  for (const item of raw.slice(0, 100)) {
+    const productId = typeof item?.productId === 'string' ? item.productId : '';
+    const quantity = Math.floor(Number(item?.quantity));
+    if (productId && Number.isFinite(quantity) && quantity >= 1) {
+      result.push({ productId, quantity: Math.min(quantity, 999) });
+    }
+  }
+  return result;
+}
+
+// محدد معدل طلبات بسيط (بدون مكتبات) لحماية مسارات الذكاء الاصطناعي من الإساءة
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+function rateLimit(maxPerMinute: number): express.RequestHandler {
+  return (req, res, next) => {
+    const key = `${req.baseUrl}|${req.ip}`;
+    const now = Date.now();
+    const bucket = rateBuckets.get(key);
+    if (!bucket || now > bucket.resetAt) {
+      rateBuckets.set(key, { count: 1, resetAt: now + 60_000 });
+      return next();
+    }
+    bucket.count += 1;
+    if (bucket.count > maxPerMinute) {
+      return res.status(429).json({ error: 'عدد الطلبات كبير، حاول بعد قليل' });
+    }
+    next();
+  };
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of rateBuckets) {
+    if (now > bucket.resetAt) rateBuckets.delete(key);
+  }
+}, 5 * 60_000).unref();
+
+app.use('/api/chat', rateLimit(40));
+app.use('/api/image-search', rateLimit(20));
+app.use('/api/deal-score', rateLimit(60));
+app.use('/api/optimize-cart', rateLimit(120));
 
 // تهيئة عميل Google Gemini AI بشكل آمن في جانب الخادم
 let geminiClient: GoogleGenAI | null = null;
@@ -277,7 +353,7 @@ app.get('/api/coupons', (req, res) => {
 // 4.5. مسار مقياس قوة العرض (Deal Score Engine) بالذكاء الاصطناعي
 app.post('/api/deal-score', async (req, res) => {
   try {
-    const { productId, storeId } = req.body;
+    const { productId, storeId } = req.body || {};
     if (!productId) {
       return res.status(400).json({ error: 'معرّف المنتج مطلوب (productId)' });
     }
@@ -328,8 +404,7 @@ app.post('/api/deal-score', async (req, res) => {
   "bestTimeBuy": "توقيت الشراء الموصى به للمستهلك"
 }`;
 
-      const candidateModels = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
-      for (const modelName of candidateModels) {
+      for (const modelName of GEMINI_MODELS) {
         try {
           const response = await ai.models.generateContent({
             model: modelName,
@@ -339,7 +414,7 @@ app.post('/api/deal-score', async (req, res) => {
             },
           });
           if (response.text) {
-            const parsed = JSON.parse(response.text.trim());
+            const parsed = parseModelJson(response.text);
             const merged = {
               ...baseScore,
               overallScore:
@@ -368,7 +443,7 @@ app.post('/api/deal-score', async (req, res) => {
               },
               isAiGenerated: true,
             };
-            dealScoreAiCache.set(cacheKey, merged);
+            cacheSet(dealScoreAiCache, cacheKey, merged);
             return res.json(merged);
           }
         } catch (err: any) {
@@ -380,11 +455,11 @@ app.post('/api/deal-score', async (req, res) => {
       }
     }
 
-    dealScoreAiCache.set(cacheKey, baseScore);
+    cacheSet(dealScoreAiCache, cacheKey, baseScore);
     res.json(baseScore);
   } catch (error: any) {
     try {
-      const { productId, storeId } = req.body;
+      const { productId, storeId } = req.body || {};
       const product = SAUDI_PRODUCTS.find((p) => p.id === productId) || SAUDI_PRODUCTS[0];
       const fallback = calculateLocalDealScore(product, storeId, SAUDI_STORES, SAUDI_COUPONS);
       res.json(fallback);
@@ -396,24 +471,28 @@ app.post('/api/deal-score', async (req, res) => {
 
 // مسار GET سريع لمقياس قوة العرض
 app.get('/api/deal-score', async (req, res) => {
-  const productId = req.query.productId as string;
-  const storeId = req.query.storeId as string | undefined;
-  if (!productId) {
-    return res.status(400).json({ error: 'معرّف المنتج مطلوب (productId)' });
+  try {
+    const productId = req.query.productId as string;
+    const storeId = req.query.storeId as string | undefined;
+    if (!productId) {
+      return res.status(400).json({ error: 'معرّف المنتج مطلوب (productId)' });
+    }
+    const product = SAUDI_PRODUCTS.find((p) => p.id === productId);
+    if (!product) {
+      return res.status(404).json({ error: 'المنتج غير موجود' });
+    }
+    const result = calculateLocalDealScore(product, storeId, SAUDI_STORES, SAUDI_COUPONS);
+    res.json(result);
+  } catch (_) {
+    res.status(500).json({ error: 'فشل في تقييم مقياس قوة العرض' });
   }
-  const product = SAUDI_PRODUCTS.find((p) => p.id === productId);
-  if (!product) {
-    return res.status(404).json({ error: 'المنتج غير موجود' });
-  }
-  const result = calculateLocalDealScore(product, storeId, SAUDI_STORES, SAUDI_COUPONS);
-  res.json(result);
 });
 
 // 5. مسار تحسين السلة الشرائية المتقدم عبر الخوارزميات والذكاء الاصطناعي
 app.post('/api/optimize-cart', async (req, res) => {
   try {
-    const { cart } = req.body;
-    if (!Array.isArray(cart) || cart.length === 0) {
+    const cart = sanitizeCart(req.body?.cart);
+    if (cart.length === 0) {
       return res.status(400).json({ error: 'يرجى تقديم عناصر السلة بشكل صحيح' });
     }
 
@@ -470,10 +549,9 @@ ${cartSummaryList}
 }`;
 
       // محاولة استدعاء النماذج بترتيب الأفضلية وتخفيف الضغط على الحصة
-      const candidateModels = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
       let modelSuccess = false;
 
-      for (const modelName of candidateModels) {
+      for (const modelName of GEMINI_MODELS) {
         if (modelSuccess) break;
         try {
           const response = await ai.models.generateContent({
@@ -485,7 +563,7 @@ ${cartSummaryList}
           });
 
           if (response.text) {
-            const parsed = JSON.parse(response.text.trim());
+            const parsed = parseModelJson(response.text);
             aiInsights = { ...aiInsights, ...parsed };
             modelSuccess = true;
           }
@@ -501,7 +579,7 @@ ${cartSummaryList}
     }
 
     // حفظ النتيجة في الذاكرة المؤقتة لتسريع الاستجابة
-    cartAiCache.set(cacheKey, aiInsights);
+    cacheSet(cartAiCache, cacheKey, aiInsights);
 
     res.json({
       ...optimization,
@@ -510,8 +588,9 @@ ${cartSummaryList}
   } catch (error: any) {
     // استعادة فورية باستخدام الحساب المحلي حتى في أقصى الحالات غير المتوقعة
     try {
-      const fallbackOptimization = runCartOptimization(req.body.cart || [], SAUDI_PRODUCTS, SAUDI_STORES, SAUDI_COUPONS);
-      const fallbackInsights = generateSmartLocalInsights(req.body.cart || [], fallbackOptimization);
+      const safeCart = sanitizeCart(req.body?.cart);
+      const fallbackOptimization = runCartOptimization(safeCart, SAUDI_PRODUCTS, SAUDI_STORES, SAUDI_COUPONS);
+      const fallbackInsights = generateSmartLocalInsights(safeCart, fallbackOptimization);
       return res.json({
         ...fallbackOptimization,
         aiInsights: fallbackInsights,
@@ -525,10 +604,12 @@ ${cartSummaryList}
 // 6. مسار المستشار الذكي للدردشة المباشرة (Gemini AI Shopping Chat)
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message } = req.body;
-    if (!message || typeof message !== 'string' || !message.trim()) {
+    const rawMessage = req.body?.message;
+    if (!rawMessage || typeof rawMessage !== 'string' || !rawMessage.trim()) {
       return res.status(400).json({ error: 'الرسالة مطلوبة' });
     }
+    // تحديد الطول الأقصى للرسالة لتجنب الإساءة واستهلاك الكوتا
+    const message = rawMessage.slice(0, 2000);
 
     const ai = getGeminiClient();
 
@@ -545,10 +626,9 @@ app.post('/api/chat', async (req, res) => {
 4. أسلوبك: مهني، عملي، ناصح، وودود، تستخدم مصطلحات التوفير بالريال السعودي (ر.س) واللغة العربية السليمة السهلة.
 5. شجع المستخدم على إضافة المنتجات لسلة التطبيق الذكية ليتم توزيعها ومطابقتها خوارزمياً.`;
 
-    const candidateModels = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
     let replyText = '';
 
-    for (const modelName of candidateModels) {
+    for (const modelName of GEMINI_MODELS) {
       try {
         const response = await ai.models.generateContent({
           model: modelName,
@@ -586,7 +666,7 @@ app.post('/api/chat', async (req, res) => {
     res.json(generateSmartChatReply(message));
   } catch (error: any) {
     // في حال حدوث أي استثناء عام، الرد بذكاء دون خطأ 500
-    res.json(generateSmartChatReply(req.body?.message || 'مساعدة في التوفير'));
+    res.json(generateSmartChatReply(String(req.body?.message || 'مساعدة في التوفير').slice(0, 2000)));
   }
 });
 
@@ -594,7 +674,7 @@ app.post('/api/chat', async (req, res) => {
 app.post('/api/image-search', async (req, res) => {
   const startTime = Date.now();
   try {
-    const { image, targetProductId } = req.body;
+    const { image, targetProductId } = req.body || {};
     if (!image || typeof image !== 'string') {
       return res.status(400).json({
         success: false,
@@ -608,7 +688,8 @@ app.post('/api/image-search', async (req, res) => {
     let decodedSvgText = '';
 
     if (image.startsWith('data:')) {
-      const match = image.match(/^data:([^;]+);(base64|utf8)?,?(.*)$/);
+      // يدعم: data:image/png;base64,XXX  و  data:image/svg+xml;utf8,<svg>  و  data:image/svg+xml,%3Csvg
+      const match = image.match(/^data:([^;,]+)(?:;(base64|utf8))?,([\s\S]*)$/);
       if (match) {
         mimeType = match[1] || 'image/jpeg';
         const encoding = match[2];
@@ -617,7 +698,11 @@ app.post('/api/image-search', async (req, res) => {
           base64Data = rawContent;
         } else if (mimeType.includes('svg')) {
           isSvgData = true;
-          decodedSvgText = decodeURIComponent(rawContent);
+          try {
+            decodedSvgText = decodeURIComponent(rawContent);
+          } catch (_) {
+            decodedSvgText = rawContent;
+          }
           // تحويل الـ SVG إلى base64 لتمكين إرسالها لـ Vision API
           base64Data = Buffer.from(decodedSvgText).toString('base64');
         } else {
@@ -768,10 +853,26 @@ async function setupViteOrStatic() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    // بديل آمن لـ app.get('*') يعمل في Express 4 و 5
+    app.use((req, res) => {
+      if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'المسار غير موجود' });
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // معالج أخطاء عام: يرجع JSON بدل صفحة HTML (مثل تجاوز حجم الصورة أو JSON تالف)
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (err?.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'حجم الطلب كبير جداً' });
+    }
+    if (err?.type === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'صيغة الطلب غير صحيحة' });
+    }
+    console.error('Unhandled server error:', err);
+    res.status(500).json({ error: 'خطأ غير متوقع في الخادم' });
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Smart Deal AI Server running at http://0.0.0.0:${PORT}`);
